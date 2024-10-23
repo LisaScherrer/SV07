@@ -1,0 +1,305 @@
+---
+title: "Klassen und Innovation - Vorbereitung E07"
+format: pdf
+editor: source
+editor_options: 
+  chunk_output_type: console
+---
+
+# 1. Vorbereitung
+
+Benötigte Pakete (und falls noch nicht installiert, zuerst installieren in der Console!)
+
+```{r}
+library(poLCA) #latente Klassenanalyse
+library(FactoMineR) #MCA
+library(forcats) #Tidyverse, Umgang mit Faktoren
+library(dplyr) #Tidyverse, Datenwrangling allgemein
+library(stringr) #Tidyverse, Umgang mit Characterdaten
+#benötigte Funktion für einen Kennewert LCA
+entropy <- function(p) {
+  p <- p[p > (sqrt(.Machine$double.eps))]
+  sum(-p * log(p))
+  }
+```
+
+Daten aus dem Intercept Survey laden (*Making Sense of Segregation in Public Space*, vgl. Widmer 2024)
+
+```{r}
+pfad <- "C:/Users/SchweglG/R_Daten alle/R_Daten/11_HS24/Klassen und Innovation/E07/"
+daten <- read.csv(file = paste0(pfad, "2529_PublicSpace_InterceptSurvey_Data_v1.0.csv"))
+daten$casenum <- 1000:(999+dim(daten)[1])
+```
+
+# 2. Latente Klassenanalyse
+
+Ziel dieses Schrittes ist es, eine Klasseneinteilung zu erreichen und hierfür eine latente Klassenanalyse zu verwenden (LCA, siehe zur Einführung https://link.springer.com/book/9783658457723): ein induktiver Prozess zur Bestimmung einer latenten Variable -- Klassenzugehörigkeit --, welche den Zusammenhang zwischen Beruf, Einkommen, Bildung und Alter bestimmt.
+
+Sie müssen diesen Prozess nicht verstehen, sondern lediglich dessen Resultat. Ziel der Sitzung ist also nicht ein Verständis der LCA zu erlangen, denn sie ist nur ein Mittel zu Zweck hier.
+
+Als *Hinweise*: Der Tatsache, dass im Namen der Methode der Begriff der "Klasse" auftaucht ist nicht weiter relevant. Oder besser: Der Begirff entspricht  nicht dem theoretischen Verständnis, sondern dem allgemeineren Verständnis (Zugehörigkeit zu einer Gruppe).
+
+Hier werden nun Klassen eingeteilt aufgrund folgender vier Variable:
+
+-   f13_occ1 Main occupation/employment status
+-   f16_edu Highest level of education
+-   f17_rev Combined gross monthly income of household
+-   Alter, Klassifiziert in vier Kategorien (jünger als 25, 25 bis 40, 40 bis 63, 63+)
+
+```{r}
+daten$occupation <- factor(daten$f13_occ1)
+daten$education <- factor(daten$f16_edu)
+daten$f17_rev[is.na(daten$f17_rev)] <- "NA"
+daten$revenue <- factor(daten$f17_rev)
+daten$f10_agecl <- NA
+daten$f10_agecl[daten$f10_year > 1996] <- "Age1"
+daten$f10_agecl[daten$f10_year < 1997 &
+                  daten$f10_year > 1980] <- "Age2"
+daten$f10_agecl[daten$f10_year < 1981 &
+                  daten$f10_year > 1958] <- "Age3"
+daten$f10_agecl[daten$f10_year < 1957] <- "Age4"
+daten$agecl <- factor(daten$f10_agecl)
+```
+
+
+Latente Klassenanalyse - Bestimmung der Anzahl Klassen (Achtung, Codeausführung dauert etwas länger):
+
+```{r}
+lca.var <- cbind(occupation, education, revenue, agecl) ~ 1
+set.seed(999)
+lc <- list() # leeres Listen-Objekt erstellen
+for(i in 1:8){
+  lc[[i]] <- poLCA(lca.var, daten, nclass=i, maxiter=5000,
+                   tol=1e-8, na.rm=FALSE,
+                   nrep=5, verbose=FALSE, calc.se=TRUE)
+  }
+```
+
+Überblick zu den verschiedenen Varianten (nur zur Vorbereitung):
+
+```{r eval=FALSE}
+table_LCA <- data.frame(Modell=0, LL=0, npar=0, BIC=0, AIC=0,
+                        Gsq= 0, df=0, p_gsq=0, e.R2=0)
+
+for(i in 1:length(lc)){
+  table_LCA [i,2] <- round(lc[[i]]$llik,0)
+  table_LCA [i,3] <- lc[[i]]$npar
+  table_LCA [i,4] <- round(lc[[i]]$bic,0)
+  table_LCA [i,5] <- round(lc[[i]]$aic,0)
+  table_LCA [i,6] <- round(lc[[i]]$Gsq,0)
+  table_LCA [i,7] <- lc[[i]]$resid.df
+  table_LCA [i,8] <- round(pchisq(lc[[i]]$Gsq,
+                                  df=lc[[i]]$resid.df,
+                                  lower.tail = FALSE),3)
+  error_prior <- entropy(lc[[i]]$P)
+  error_post <- mean(apply(lc[[i]]$posterior, 1, entropy))
+  table_LCA[i,9] <- round(((error_prior - error_post) /
+                             error_prior),2)
+  if (i==1) {
+    table_LCA [i,1] <- paste("Klasse")
+    }
+if(i>1) {
+  table_LCA [i,1] <- paste("Klassen")}
+}
+table_LCA
+```
+
+Entscheidung für 4 Klassen:
+
+```{r}
+probs.start.new <- poLCA.reorder(lc[[4]]$probs.start,order(lc[[4]]$P,
+                                                           decreasing=TRUE))
+lca.4 <- poLCA(lca.var, daten, nclass=4, na.rm=FALSE, 
+               probs.start = probs.start.new)
+```
+
+* Klasse 1: High capital volumne 
+* Klasse 2: Medium capital volumne
+* Klasse 3: Retirees
+* Klasse 4: In education
+
+```{r}
+daten$class <- lca.4$predclass %>%
+  factor(levels = 1:4, labels = c("C1_HCV", "C2_MCV", "C3_Re", "C4_Ed"))
+```
+
+# 3. Multiple Korrespondenzanalyse
+
+Hier wird nun die Korrespondenzanalyse gerechnet, wobei zuerst die aktiven und passiv-ergänzenden Variablen vorbereitet werden.
+
+## 3.1 Vorbereitung der Variablen, aktive:
+
+-   f02_time Estimated duration of today's visit
+
+```{r}
+daten$f02_time_leveln <- case_when(daten$f02_time_level < 4 ~ daten$f02_time_level,
+                                   daten$f02_time_level == 4 ~ 3,
+                                   daten$f02_time_level == 5 ~ 4,
+                                   daten$f02_time_level == 6 ~ 4)
+daten$time <- factor(daten$f02_time_leveln,
+                     levels = 1:4,
+                     labels = c("transit", "10min", "30min", "60+min"))
+```
+
+-   f03_rel Relationship to the square
+
+```{r}
+daten$f03_rel_leveln <- case_when(daten$f03_rel_level < 4 ~ daten$f03_rel_level,
+                                  daten$f03_rel_level == 4 ~ 3,
+                                  daten$f03_rel_level == 5 ~ 4,
+                                  daten$f03_rel_level == 6 ~ 4,
+                                  daten$f03_rel_level == 7 ~ NA)
+daten$relationship <- factor(daten$f03_rel_leveln,
+                             levels = 1:4,
+                             labels = c("neigh", "resi", "near_e-s", "visit"))
+```
+
+-   f05_last_trans
+
+```{r}
+table(daten$f05_last_trans)
+daten$f05_last_transn <- case_when(daten$f05_last_trans_level > 2 ~ 3,
+                                   daten$f05_last_trans_level < 3 ~ daten$f05_last_trans_level)
+daten$transit <- factor(daten$f05_last_transn,
+                        levels = 1:3,
+                        labels = c("walk", "bike", "other"))
+```
+
+-   f06_freq
+
+```{r}
+daten$f06_freq_leveln <- case_when(daten$f06_freq_level < 4 ~ daten$f06_freq_level,
+                                   daten$f06_freq_level > 3 ~ 4)
+daten$frequency <- factor(daten$f06_freq_leveln,
+                          levels = 1:4,
+                          labels = c("daily", "s-week", "s-month", "f-less"))
+```
+
+-   f09_stranger_level
+
+```{r}
+daten$stranger <- factor(daten$f09_stranger_level,
+                         levels = 1:3,
+                         labels = c("nobody", "familiar", "known"))
+table(daten$stranger)
+```
+
+-   f19_alone / f19_partner / f19_kids / f19_friend / f19_other
+
+```{r}
+table(daten$f19_kids, daten$f19_partner)
+daten$f19_leveln <- case_when(daten$f19_alone == 2 ~ 1,
+                              daten$f19_kids > 0 ~ 2,
+                              daten$f19_friend > 0 ~ 3,
+                              daten$f19_other > 0 ~ 3)
+daten$company <- factor(daten$f19_leveln,
+                        levels = 1:3,
+                        labels = c("alone", "fam-part", "frien-oth"))
+```
+
+## 3.2 Vorbereitung der Variablen, passive:
+
+Klassen (siehe oben)
+
+Geschlecht (Achtung: Wird in der Analyse unten ausgeklammert!)
+```{r}
+daten$gender <- factor(daten$f18_gender)
+```
+
+Platz
+```{r}
+daten$square <- str_trunc(daten$f20_square, 4, "right", ellipsis = "") %>% factor()
+```
+
+Alter
+```{r}
+daten$age <- 2021 - daten$f10_year
+```
+
+Weitere passive Variablen könnten ergänzt werden (siehe dazu die Variablenliste in der Dokumentation).
+
+## 3.3 MCA
+
+Teildatensatz erstellen:
+
+```{r}
+daten_mca <- daten %>% dplyr::select(time, relationship, transit, frequency, stranger, company, #aktive
+                                     square, class) %>%  #passive
+  na.omit()
+```
+
+MCA berechnen:
+
+```{r}
+mca1 <- MCA(daten_mca, graph = F, quali.sup = 7:8) #noch keine passiven Variablen ergänzt
+```
+
+Prüfung der Ergebnises:
+
+```{r eval=FALSE}
+summary(mca1)
+plot(mca1$eig[, "eigenvalue"],
+     main = "Screeplot der Dimensionen", ylab = "Eigenwerte"
+)
+```
+...3 Dimensionen scheinen angemessen zu sein.
+
+## 3.4 Interpretation
+
+Welche Modalitäten tragen jeweils überdurchschnittlich zu den Achsen bei?
+```{r}
+#Achse 1
+cbind(mca1$var$contrib[mca1$var$contrib[, "Dim 1"]>mean(mca1$var$contrib[, "Dim 1"]),
+                 "Dim 1"], 
+      mca1$var$coord[mca1$var$contrib[, "Dim 1"]>mean(mca1$var$contrib[, "Dim 1"]),
+                 "Dim 1"]) %>% data.frame() %>% rename("Contr"=X1, "Coord"=X2)
+#Achse 2
+cbind(mca1$var$contrib[mca1$var$contrib[, "Dim 2"]>mean(mca1$var$contrib[, "Dim 2"]),
+                 "Dim 2"], 
+      mca1$var$coord[mca1$var$contrib[, "Dim 2"]>mean(mca1$var$contrib[, "Dim 2"]),
+                 "Dim 2"]) %>% data.frame() %>% rename("Contr"=X1, "Coord"=X2)
+#Achse 3
+cbind(mca1$var$contrib[mca1$var$contrib[, "Dim 3"]>mean(mca1$var$contrib[, "Dim 3"]),
+                 "Dim 3"], 
+      mca1$var$coord[mca1$var$contrib[, "Dim 3"]>mean(mca1$var$contrib[, "Dim 3"]),
+                 "Dim 3"]) %>% data.frame() %>% rename("Contr"=X1, "Coord"=X2)
+
+```
+
+
+
+**Seminar, Teil 1**: Interpretieren Sie die Achsen 1 und 2 (erster Plot). Betrachten Sie nachher die Verteilung der ergänzenden Variablen in diesem sozialen Raum (zweiter Plot). Was können Sie über die Korrespondenz zwischen symbolischen und objektivem Raum aussagen?
+
+Plot 1 - Darstellung der MCA, Achsen 1 und 2: 
+
+```{r}
+plot.MCA(mca1, axes = c(1,2),  new.plot = T,
+         label = c("var"), invisible = c("ind", "quali.sup", "quanti.sup"), 
+         habillage = "quali")
+
+```
+
+Plot 2 - Darstellung der MCA, AChsen 1 und 2, passive
+```{r}
+plot.MCA(mca1, axes = c(1,2),  new.plot = T,
+         label = "quali.sup", invisible = "ind")
+```
+
+
+**Seminar, Teil 2**: Interpretieren Sie die Achsen 1 und 3 (dritter Plot). Betrachten Sie nachher die Verteilung der ergänzenden Variablen in diesem sozialen Raum (vierter Plot). Was können Sie über die Korrespondenz zwischen symbolischen und objektivem Raum aussagen?
+
+
+Plot 3 - Darstellung der MCA, Achsen 2 und 3:
+
+```{r}
+plot.MCA(mca1, axes = c(1,3),  new.plot = T,
+         label = c("var"), invisible = c("ind", "quali.sup", "quanti.sup"), 
+         habillage = "quali")
+```
+
+
+Plot 4 - Darstellung der MCA, AChsen 1 und 3, passive
+```{r}
+plot.MCA(mca1, axes = c(1,3),  new.plot = T,
+         label = "quali.sup", invisible = "ind")
+```
