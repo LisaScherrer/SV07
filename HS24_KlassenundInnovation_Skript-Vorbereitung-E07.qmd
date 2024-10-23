@@ -26,8 +26,7 @@ entropy <- function(p) {
 Daten aus dem Intercept Survey laden (*Making Sense of Segregation in Public Space*, vgl. Widmer 2024)
 
 ```{r}
-pfad <- "C:/Users/SchweglG/R_Daten alle/R_Daten/11_HS24/Klassen und Innovation/E07/"
-daten <- read.csv(file = paste0(pfad, "2529_PublicSpace_InterceptSurvey_Data_v1.0.csv"))
+daten <- read.csv(file = paste0("2529_PublicSpace_InterceptSurvey_Data_v1.0.csv"))
 daten$casenum <- 1000:(999+dim(daten)[1])
 ```
 
